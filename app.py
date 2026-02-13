@@ -240,7 +240,7 @@ def get_board_data() -> dict:
 # CSV export / import
 # ---------------------------------------------------------------------------
 
-def game_to_csv() -> str:
+def game_to_csv(game_name: str = "") -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
@@ -253,7 +253,7 @@ def game_to_csv() -> str:
         writer.writerow([
             i + 1, entry["uci"], entry["san"], replay.fen(),
             st.session_state.white_player, st.session_state.black_player,
-            st.session_state.get("inp_name", ""), datetime.now().isoformat(),
+            game_name, datetime.now().isoformat(),
         ])
     return buf.getvalue()
 
@@ -611,27 +611,32 @@ with col_panel:
 
     with st.expander("Export Game"):
         if st.session_state.move_history:
-            game_name = st.text_input(
-                "Game name (optional)",
-                key="inp_name",
-            )
-            name_slug = game_name.strip().replace(" ", "_") or "chess"
-            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_data = game_to_csv()
+            with st.form("export_form", clear_on_submit=False):
+                export_name = st.text_input("Game name (optional)", key="inp_name")
+                do_export = st.form_submit_button(
+                    "⬇ Export CSV", use_container_width=True,
+                )
 
-            def _bump_dl():
-                st.session_state._dl_count = st.session_state.get("_dl_count", 0) + 1
+            if do_export:
+                name_slug = export_name.strip().replace(" ", "_") or "chess"
+                ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.session_state._pending_csv = game_to_csv(export_name)
+                st.session_state._pending_filename = f"{name_slug}_{ts_str}.csv"
 
-            dl_count = st.session_state.get("_dl_count", 0)
-            st.download_button(
-                "⬇ Download CSV",
-                data=csv_data,
-                file_name=f"{name_slug}_{ts_str}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key=f"_dl_{dl_count}",
-                on_click=_bump_dl,
-            )
+            if st.session_state.get("_pending_csv"):
+                def _bump_dl():
+                    st.session_state._dl_count = st.session_state.get("_dl_count", 0) + 1
+
+                dl_count = st.session_state.get("_dl_count", 0)
+                st.download_button(
+                    f"📥 Download {st.session_state._pending_filename}",
+                    data=st.session_state._pending_csv,
+                    file_name=st.session_state._pending_filename,
+                    mime="text/csv",
+                    use_container_width=True,
+                    key=f"_dl_{dl_count}",
+                    on_click=_bump_dl,
+                )
         else:
             st.caption("Make some moves first.")
 
