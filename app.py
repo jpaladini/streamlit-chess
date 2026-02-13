@@ -23,7 +23,7 @@ POLL_RATE_SECONDS = 2  # How often to check for opponent moves (adjustable)
 # ---------------------------------------------------------------------------
 # Custom board component (JS handles click-to-move, no page reloads)
 # ---------------------------------------------------------------------------
-_COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chess_component")
+_COMPONENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _chess_board_func = components.declare_component("chess_board", path=_COMPONENT_DIR)
 
 
