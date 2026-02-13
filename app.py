@@ -77,6 +77,7 @@ def _init_state():
         "game_id": None,            # 4-char code when in a multiplayer game
         "player_color": None,       # "white" or "black"
         "_last_db_ts": None,        # last processed DB timestamp
+        "_opponent_connected": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -270,6 +271,12 @@ def poll_for_moves():
     if not game:
         return
 
+    # Detect opponent joining
+    opp_key = "black_session" if st.session_state.player_color == "white" else "white_session"
+    if game.get(opp_key) and not st.session_state.get("_opponent_connected"):
+        st.session_state._opponent_connected = True
+        st.rerun(scope="app")
+
     # Detect new moves
     db_ts = game["last_move_ts"]
     if db_ts is not None and db_ts != st.session_state.get("_last_db_ts"):
@@ -426,6 +433,7 @@ with st.sidebar:
             st.session_state.game_id = None
             st.session_state.player_color = None
             st.session_state._last_db_ts = None
+            st.session_state._opponent_connected = False
             reset_game()
         st.session_state.game_mode = new_mode
         st.rerun()
@@ -489,6 +497,7 @@ with st.sidebar:
                 st.session_state.game_id = None
                 st.session_state.player_color = None
                 st.session_state._last_db_ts = None
+                st.session_state._opponent_connected = False
                 reset_game()
                 st.rerun()
 
