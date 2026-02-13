@@ -23,6 +23,8 @@ body{background:transparent;overflow:hidden;font-family:system-ui,sans-serif}
   transition:filter .08s;
 }
 .sq:hover{filter:brightness(1.08);}
+.sq.no-interact{cursor:default}
+.sq.no-interact:hover{filter:none}
 
 .sq .pc{
   font-size:min(5.5vw,3.2rem);line-height:1;
@@ -100,7 +102,8 @@ function isPieceTurn(p){
 
 function renderBoard(){
   if(!data)return;
-  const{position,legalMoves,lastMove,checkSquare,flipped,turn,gameOver}=data;
+  const{position,legalMoves,lastMove,checkSquare,flipped,turn,gameOver,myTurn}=data;
+  const canInteract=myTurn&&!gameOver;
   const board=document.getElementById("board");
   let html="";
 
@@ -141,7 +144,8 @@ function renderBoard(){
       // piece
       const pieceHtml=piece?`<span class="pc">${PIECE[piece]}</span>`:"";
 
-      html+=`<div class="sq" data-sq="${sq}" style="background:${bg}">${coords}${indicator}${pieceHtml}</div>`;
+      const cls=canInteract?"sq":"sq no-interact";
+      html+=`<div class="${cls}" data-sq="${sq}" style="background:${bg}">${coords}${indicator}${pieceHtml}</div>`;
     }
   }
 
@@ -156,7 +160,7 @@ function renderBoard(){
 }
 
 function handleClick(sq){
-  if(!data||data.gameOver)return;
+  if(!data||data.gameOver||!data.myTurn)return;
   const piece=data.position[sq]||null;
 
   if(selectedSq===null){

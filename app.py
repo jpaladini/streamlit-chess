@@ -4,12 +4,21 @@ import chess
 import csv
 import io
 import os
-from datetime import datetime
+import json
+import uuid
+from datetime import datetime, timedelta
+
+import db
 
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Chess", page_icon="♟", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+POLL_RATE_SECONDS = 2  # How often to check for opponent moves (adjustable)
 
 # ---------------------------------------------------------------------------
 # Custom board component (JS handles click-to-move, no page reloads)
@@ -18,7 +27,7 @@ _COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chess
 _chess_board_func = components.declare_component("chess_board", path=_COMPONENT_DIR)
 
 
-def chess_board_widget(data: dict, key: str = "board"):
+def chess_board_widget(data: dict, key: str = "_board_widget"):
     """Render the interactive chess board. Returns move dict or None."""
     return _chess_board_func(data=data, key=key, default=None)
 
@@ -37,6 +46,19 @@ PIECE_VALUE = {
 }
 
 # ---------------------------------------------------------------------------
+# Database init (runs once per app lifecycle)
+# ---------------------------------------------------------------------------
+
+@st.cache_resource
+def _init_database():
+    db.init_db()
+    db.cleanup_old_games(24)
+    return True
+
+
+_init_database()
+
+# ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
 
@@ -49,6 +71,12 @@ def _init_state():
         "game_name": "",
         "flip_board": False,
         "_last_move_ts": None,
+        # Multiplayer
+        "_session_id": str(uuid.uuid4()),
+        "game_mode": "local",      # "local" or "multiplayer"
+        "game_id": None,            # 4-char code when in a multiplayer game
+        "player_color": None,       # "white" or "black"
+        "_last_db_ts": None,        # last processed DB timestamp
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -73,6 +101,15 @@ def make_move(move: chess.Move):
     b.push(move)
     st.session_state.move_history.append({"uci": move.uci(), "san": san})
 
+    # Sync to DB in multiplayer
+    if st.session_state.game_mode == "multiplayer" and st.session_state.game_id:
+        ts = db.update_game_move(
+            st.session_state.game_id,
+            b.fen(),
+            json.dumps(st.session_state.move_history),
+        )
+        st.session_state._last_db_ts = ts
+
 
 def undo_move():
     b: chess.Board = st.session_state.board
@@ -81,8 +118,20 @@ def undo_move():
         st.session_state.move_history.pop()
 
 
+def is_my_turn() -> bool:
+    """Can the current session move right now?"""
+    if st.session_state.game_mode == "local":
+        return True
+    b: chess.Board = st.session_state.board
+    color = st.session_state.player_color
+    if color == "white" and b.turn == chess.WHITE:
+        return True
+    if color == "black" and b.turn == chess.BLACK:
+        return True
+    return False
+
+
 def get_captured_pieces() -> tuple[list[str], list[str]]:
-    """Return (captured_white_pieces, captured_black_pieces)."""
     initial = chess.Board()
     current = st.session_state.board
 
@@ -110,7 +159,6 @@ def get_captured_pieces() -> tuple[list[str], list[str]]:
 
 
 def material_advantage() -> int:
-    """Positive = white ahead, negative = black ahead."""
     brd: chess.Board = st.session_state.board
     white_mat = 0
     black_mat = 0
@@ -130,41 +178,37 @@ def material_advantage() -> int:
 # ---------------------------------------------------------------------------
 
 def get_board_data() -> dict:
-    """Build the data dict the JS component needs."""
     b: chess.Board = st.session_state.board
 
-    # Position: {square_int: piece_symbol}
     position = {}
     for sq in chess.SQUARES:
         p = b.piece_at(sq)
         if p:
             position[sq] = p.symbol()
 
-    # Legal moves grouped by from-square (deduped for promotions)
-    legal_by_sq: dict[int, list[int]] = {}
+    legal_by_sq: dict[int, set[int]] = {}
     for m in b.legal_moves:
         legal_by_sq.setdefault(m.from_square, set()).add(m.to_square)
-    legal_by_sq = {k: list(v) for k, v in legal_by_sq.items()}
+    legal_moves_data = {k: list(v) for k, v in legal_by_sq.items()}
 
-    # Last move
     last_move = None
     if b.move_stack:
         lm = b.peek()
         last_move = [lm.from_square, lm.to_square]
 
-    # Check square
     check_sq = None
     if b.is_check():
         check_sq = b.king(b.turn)
 
     return {
         "position": position,
-        "legalMoves": legal_by_sq,
+        "legalMoves": legal_moves_data,
         "lastMove": last_move,
         "checkSquare": check_sq,
         "flipped": st.session_state.flip_board,
         "turn": "w" if b.turn == chess.WHITE else "b",
         "gameOver": b.is_game_over(),
+        "myTurn": is_my_turn(),
     }
 
 
@@ -210,6 +254,29 @@ def load_game_from_csv(csv_text: str):
     st.session_state.white_player = white
     st.session_state.black_player = black
     st.session_state.game_name = name
+
+
+# ---------------------------------------------------------------------------
+# Multiplayer polling (auto-detects opponent moves)
+# ---------------------------------------------------------------------------
+
+@st.fragment(run_every=timedelta(seconds=POLL_RATE_SECONDS))
+def poll_for_moves():
+    """Periodically check DB for opponent's moves or new connections."""
+    if st.session_state.game_mode != "multiplayer" or not st.session_state.game_id:
+        return
+
+    game = db.get_game(st.session_state.game_id)
+    if not game:
+        return
+
+    # Detect new moves
+    db_ts = game["last_move_ts"]
+    if db_ts is not None and db_ts != st.session_state.get("_last_db_ts"):
+        st.session_state._last_db_ts = db_ts
+        st.session_state.board = chess.Board(game["fen"])
+        st.session_state.move_history = json.loads(game["move_history"])
+        st.rerun(scope="app")
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +338,7 @@ def captured_html() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# CSS (for elements outside the board component)
+# CSS
 # ---------------------------------------------------------------------------
 
 CUSTOM_CSS = """
@@ -324,6 +391,13 @@ CUSTOM_CSS = """
 .app-hdr h1 { font-size: 1.55rem; font-weight: 700; color: #2c3e50; margin: 0; letter-spacing: -.02em; }
 .app-hdr .sub { font-size: .78rem; color: #aaa; }
 
+/* ---- Game code display ---- */
+.game-code {
+    font-family: 'SF Mono','Fira Code','Consolas', monospace;
+    font-size: 1.8rem; font-weight: 700; letter-spacing: .15em;
+    text-align: center; padding: 8px; color: #2c3e50;
+}
+
 /* ---- Misc ---- */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
@@ -332,10 +406,96 @@ footer { visibility: hidden; }
 
 
 # ---------------------------------------------------------------------------
-# Layout
+# Sidebar — game mode & multiplayer controls
 # ---------------------------------------------------------------------------
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("### Game Mode")
+    mode = st.radio(
+        "Mode", ["Local", "Multiplayer"],
+        horizontal=True, label_visibility="collapsed",
+        key="_mode_radio",
+    )
+    new_mode = mode.lower()
+
+    # Handle mode switch
+    if new_mode != st.session_state.game_mode:
+        if st.session_state.game_mode == "multiplayer":
+            st.session_state.game_id = None
+            st.session_state.player_color = None
+            st.session_state._last_db_ts = None
+            reset_game()
+        st.session_state.game_mode = new_mode
+        st.rerun()
+
+    if st.session_state.game_mode == "multiplayer":
+        st.markdown("---")
+
+        if not st.session_state.game_id:
+            # --- Create ---
+            st.markdown("##### Create a game")
+            create_name = st.text_input("Your name", value="Player 1", key="_create_name")
+            if st.button("Create Game", use_container_width=True, type="primary"):
+                gid = db.create_game(st.session_state._session_id, create_name)
+                st.session_state.game_id = gid
+                st.session_state.player_color = "white"
+                st.session_state.white_player = create_name
+                st.session_state.flip_board = False
+                game = db.get_game(gid)
+                st.session_state._last_db_ts = game["last_move_ts"] if game else None
+                st.rerun()
+
+            st.markdown("##### Join a game")
+            join_code = st.text_input("Game code", max_chars=4, key="_join_code", placeholder="ABCD")
+            join_name = st.text_input("Your name", value="Player 2", key="_join_name")
+            if join_code:
+                if st.button("Join", use_container_width=True):
+                    game = db.join_game(join_code.upper(), st.session_state._session_id, join_name)
+                    if game:
+                        st.session_state.game_id = join_code.upper()
+                        st.session_state.player_color = "black"
+                        st.session_state.black_player = join_name
+                        st.session_state.white_player = game["white_player"]
+                        st.session_state.flip_board = True
+                        st.session_state.board = chess.Board(game["fen"])
+                        st.session_state.move_history = json.loads(game["move_history"])
+                        st.session_state._last_db_ts = game["last_move_ts"]
+                        st.rerun()
+                    else:
+                        st.error("Game not found or already full")
+
+        else:
+            # --- In a game ---
+            color = st.session_state.player_color
+            st.markdown(f"##### Playing as **{'White ♔' if color == 'white' else 'Black ♚'}**")
+            st.markdown(
+                f'<div class="game-code">{st.session_state.game_id}</div>',
+                unsafe_allow_html=True,
+            )
+
+            game = db.get_game(st.session_state.game_id)
+            if game:
+                opp_key = "black_session" if color == "white" else "white_session"
+                opp_name_key = "black_player" if color == "white" else "white_player"
+                if game.get(opp_key):
+                    st.success(f"vs **{game[opp_name_key]}**")
+                else:
+                    st.info("Waiting for opponent…")
+                    st.caption("Share the code above")
+
+            if st.button("Leave Game", use_container_width=True):
+                st.session_state.game_id = None
+                st.session_state.player_color = None
+                st.session_state._last_db_ts = None
+                reset_game()
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
 
 st.markdown(
     '<div class="app-hdr"><h1>&#9823; Chess</h1><span class="sub">Streamlit Edition</span></div>',
@@ -344,6 +504,10 @@ st.markdown(
 
 col_board, col_panel = st.columns([3, 2], gap="large")
 
+# Start multiplayer polling if in a game
+if st.session_state.game_mode == "multiplayer" and st.session_state.game_id:
+    poll_for_moves()
+
 # ---- Board column ----
 with col_board:
     st.markdown(game_status_html(), unsafe_allow_html=True)
@@ -351,7 +515,7 @@ with col_board:
     top_cap, bot_cap = captured_html()
     st.markdown(top_cap, unsafe_allow_html=True)
 
-    # Interactive board component (selection & highlighting in JS — no reload)
+    # Interactive board component
     result = chess_board_widget(get_board_data(), key="_board_widget")
 
     # Process move from component (only if it's a new click)
@@ -373,8 +537,8 @@ with col_board:
 
     st.write("")
 
-    # Selectbox as alternative input
-    if not board.is_game_over():
+    # Selectbox as alternative input (only when it's your turn)
+    if not board.is_game_over() and is_my_turn():
         legal_moves = list(board.legal_moves)
         if legal_moves:
             move_sans = [board.san(m) for m in legal_moves]
@@ -400,9 +564,11 @@ with col_board:
                         st.rerun()
 
     # Controls
+    is_multiplayer = st.session_state.game_mode == "multiplayer"
     bc = st.columns(3)
     with bc[0]:
-        if st.button("↩ Undo", use_container_width=True, disabled=not board.move_stack):
+        if st.button("↩ Undo", use_container_width=True,
+                      disabled=not board.move_stack or is_multiplayer):
             undo_move()
             st.rerun()
     with bc[1]:
@@ -410,9 +576,10 @@ with col_board:
             st.session_state.flip_board = not st.session_state.flip_board
             st.rerun()
     with bc[2]:
-        if st.button("New Game", use_container_width=True):
-            reset_game()
-            st.rerun()
+        if not is_multiplayer:
+            if st.button("New Game", use_container_width=True):
+                reset_game()
+                st.rerun()
 
 # ---- Side panel ----
 with col_panel:
@@ -420,11 +587,13 @@ with col_panel:
     c1, c2 = st.columns(2)
     with c1:
         st.session_state.white_player = st.text_input(
-            "White", value=st.session_state.white_player, key="inp_white"
+            "White", value=st.session_state.white_player, key="inp_white",
+            disabled=is_multiplayer,
         )
     with c2:
         st.session_state.black_player = st.text_input(
-            "Black", value=st.session_state.black_player, key="inp_black"
+            "Black", value=st.session_state.black_player, key="inp_black",
+            disabled=is_multiplayer,
         )
 
     st.markdown('<div class="ph">Moves</div>', unsafe_allow_html=True)
@@ -448,30 +617,31 @@ with col_panel:
         else:
             st.caption("Make some moves first.")
 
-    with st.expander("Import Game"):
-        uploaded = st.file_uploader(
-            "Upload CSV", type=["csv"], key="csv_upload", label_visibility="collapsed",
-        )
-        if uploaded is not None:
-            if st.button("📂 Load", use_container_width=True):
-                try:
-                    load_game_from_csv(uploaded.getvalue().decode("utf-8"))
-                    st.success("Game loaded!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed: {e}")
+    if not is_multiplayer:
+        with st.expander("Import Game"):
+            uploaded = st.file_uploader(
+                "Upload CSV", type=["csv"], key="csv_upload", label_visibility="collapsed",
+            )
+            if uploaded is not None:
+                if st.button("📂 Load", use_container_width=True):
+                    try:
+                        load_game_from_csv(uploaded.getvalue().decode("utf-8"))
+                        st.success("Game loaded!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
 
-    with st.expander("FEN"):
-        st.code(board.fen(), language=None)
-        fen_in = st.text_input(
-            "FEN", key="fen_input", label_visibility="collapsed",
-            placeholder="Paste FEN here…",
-        )
-        if fen_in:
-            if st.button("Load FEN", use_container_width=True):
-                try:
-                    st.session_state.board = chess.Board(fen_in)
-                    st.session_state.move_history = []
-                    st.rerun()
-                except ValueError as e:
-                    st.error(f"Invalid FEN: {e}")
+        with st.expander("FEN"):
+            st.code(board.fen(), language=None)
+            fen_in = st.text_input(
+                "FEN", key="fen_input", label_visibility="collapsed",
+                placeholder="Paste FEN here…",
+            )
+            if fen_in:
+                if st.button("Load FEN", use_container_width=True):
+                    try:
+                        st.session_state.board = chess.Board(fen_in)
+                        st.session_state.move_history = []
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(f"Invalid FEN: {e}")
