@@ -68,7 +68,7 @@ def _init_state():
         "move_history": [],
         "white_player": "Player 1",
         "black_player": "Player 2",
-        "game_name": "",
+        "inp_name": "",
         "flip_board": False,
         "_last_move_ts": None,
         # Multiplayer
@@ -253,7 +253,7 @@ def game_to_csv() -> str:
         writer.writerow([
             i + 1, entry["uci"], entry["san"], replay.fen(),
             st.session_state.white_player, st.session_state.black_player,
-            st.session_state.game_name, datetime.now().isoformat(),
+            st.session_state.get("inp_name", ""), datetime.now().isoformat(),
         ])
     return buf.getvalue()
 
@@ -277,7 +277,7 @@ def load_game_from_csv(csv_text: str):
     st.session_state.move_history = history
     st.session_state.white_player = white
     st.session_state.black_player = black
-    st.session_state.game_name = name
+    st.session_state.inp_name = name
 
 
 # ---------------------------------------------------------------------------
@@ -611,26 +611,27 @@ with col_panel:
 
     with st.expander("Export Game"):
         if st.session_state.move_history:
-            st.session_state.game_name = st.text_input(
+            game_name = st.text_input(
                 "Game name (optional)",
-                value=st.session_state.game_name,
                 key="inp_name",
             )
-            name_slug = st.session_state.game_name.strip().replace(" ", "_") or "chess"
+            name_slug = game_name.strip().replace(" ", "_") or "chess"
             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_data = game_to_csv()
+
+            def _bump_dl():
+                st.session_state._dl_count = st.session_state.get("_dl_count", 0) + 1
+
             dl_count = st.session_state.get("_dl_count", 0)
-            clicked = st.download_button(
+            st.download_button(
                 "⬇ Download CSV",
                 data=csv_data,
                 file_name=f"{name_slug}_{ts_str}.csv",
                 mime="text/csv",
                 use_container_width=True,
                 key=f"_dl_{dl_count}",
+                on_click=_bump_dl,
             )
-            if clicked:
-                st.session_state._dl_count = dl_count + 1
-                st.rerun()
         else:
             st.caption("Make some moves first.")
 
