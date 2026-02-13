@@ -352,7 +352,7 @@ with col_board:
     st.markdown(top_cap, unsafe_allow_html=True)
 
     # Interactive board component (selection & highlighting in JS — no reload)
-    result = chess_board_widget(get_board_data(), key="board")
+    result = chess_board_widget(get_board_data(), key="_board_widget")
 
     # Process move from component (only if it's a new click)
     if result is not None:
