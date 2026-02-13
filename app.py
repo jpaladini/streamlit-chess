@@ -616,13 +616,16 @@ with col_panel:
                 value=st.session_state.game_name,
                 key="inp_name",
             )
+            name_slug = st.session_state.game_name.strip().replace(" ", "_") or "chess"
             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_data = game_to_csv()
             st.download_button(
                 "⬇ Download CSV",
-                data=game_to_csv(),
-                file_name=f"chess_{ts_str}.csv",
+                data=csv_data,
+                file_name=f"{name_slug}_{ts_str}.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key=f"_dl_{ts_str}",
             )
         else:
             st.caption("Make some moves first.")
