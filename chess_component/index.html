@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:transparent;overflow:hidden;font-family:system-ui,sans-serif}
+
+.chess-board{
+  display:grid;
+  grid-template-columns:repeat(8,1fr);
+  width:100%;max-width:520px;
+  aspect-ratio:1;
+  border-radius:6px;overflow:hidden;
+  box-shadow:0 8px 32px rgba(0,0,0,.22),0 2px 8px rgba(0,0,0,.12);
+  border:3px solid #564332;
+  margin:0 auto;
+}
+
+.sq{
+  aspect-ratio:1;display:flex;align-items:center;justify-content:center;
+  position:relative;user-select:none;cursor:pointer;
+  transition:filter .08s;
+}
+.sq:hover{filter:brightness(1.08);}
+
+.sq .pc{
+  font-size:min(5.5vw,3.2rem);line-height:1;
+  filter:drop-shadow(1px 1px 1px rgba(0,0,0,.25));
+  z-index:1;pointer-events:none;
+}
+.sq .coord{
+  position:absolute;font-size:.6rem;font-weight:700;
+  font-family:system-ui,sans-serif;opacity:.82;z-index:2;pointer-events:none;
+}
+.sq .rank-lbl{top:3px;left:4px}
+.sq .file-lbl{bottom:2px;right:4px}
+
+/* Legal-move indicators */
+.sq .legal-dot{
+  width:26%;height:26%;border-radius:50%;
+  background:rgba(0,0,0,.18);z-index:1;pointer-events:none;
+}
+.sq .legal-ring{
+  position:absolute;inset:4%;
+  border-radius:50%;
+  border:5px solid rgba(0,0,0,.18);
+  z-index:2;pointer-events:none;
+}
+
+/* Promotion picker */
+.promo-overlay{
+  position:absolute;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,.45);z-index:10;
+  display:flex;align-items:center;justify-content:center;
+}
+.promo-box{
+  background:#fff;border-radius:10px;padding:12px 8px;
+  display:flex;gap:6px;
+  box-shadow:0 8px 30px rgba(0,0,0,.4);
+}
+.promo-btn{
+  width:56px;height:56px;display:flex;align-items:center;justify-content:center;
+  font-size:2.4rem;cursor:pointer;border-radius:8px;
+  transition:background .1s;
+}
+.promo-btn:hover{background:#e8e8e8;}
+
+#root{position:relative}
+</style>
+</head>
+<body>
+<div id="root"><div class="chess-board" id="board"></div></div>
+<script>
+// ---- Streamlit component protocol ----
+function sendMsg(type,data){
+  window.parent.postMessage(Object.assign({isStreamlitMessage:true,type},data),"*");
+}
+function setVal(v){sendMsg("streamlit:setComponentValue",{value:v})}
+function setHeight(h){sendMsg("streamlit:setFrameHeight",{height:h})}
+function ready(){sendMsg("streamlit:componentReady",{apiVersion:1})}
+
+// ---- Constants ----
+const PIECE={P:"♙",N:"♘",B:"♗",R:"♖",Q:"♕",K:"♔",p:"♟",n:"♞",b:"♝",r:"♜",q:"♛",k:"♚"};
+const LIGHT="#eeeed2",DARK="#769656";
+const SEL_LIGHT="#f7f769",SEL_DARK="#bbcc33";
+const LAST_LIGHT="#f6f669",LAST_DARK="#baca2b";
+const CHECK_COLOR="#e84040";
+
+// ---- State ----
+let data=null,selectedSq=null,legalTargets=new Set();
+
+function isLight(file,rank){return(file+rank)%2===1}
+function sqFile(sq){return sq%8}
+function sqRank(sq){return Math.floor(sq/8)}
+function isPieceTurn(p){
+  if(!data)return false;
+  return data.turn==="w"?p===p.toUpperCase():p===p.toLowerCase();
+}
+
+function renderBoard(){
+  if(!data)return;
+  const{position,legalMoves,lastMove,checkSquare,flipped,turn,gameOver}=data;
+  const board=document.getElementById("board");
+  let html="";
+
+  const ranks=flipped?[0,1,2,3,4,5,6,7]:[7,6,5,4,3,2,1,0];
+  const files=flipped?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
+
+  for(const rank of ranks){
+    for(let fi=0;fi<8;fi++){
+      const file=files[fi];
+      const sq=file+rank*8;
+      const piece=position[sq]||null;
+      const light=isLight(file,rank);
+
+      // background
+      let bg;
+      if(sq===selectedSq){
+        bg=light?SEL_LIGHT:SEL_DARK;
+      }else if(checkSquare!==null&&sq===checkSquare){
+        bg=CHECK_COLOR;
+      }else if(lastMove&&(sq===lastMove[0]||sq===lastMove[1])){
+        bg=light?LAST_LIGHT:LAST_DARK;
+      }else{
+        bg=light?LIGHT:DARK;
+      }
+
+      // coord labels
+      let coords="";
+      const coordCol=light?DARK:LIGHT;
+      if(fi===0) coords+=`<span class="coord rank-lbl" style="color:${coordCol}">${rank+1}</span>`;
+      if(rank===(flipped?7:0)) coords+=`<span class="coord file-lbl" style="color:${coordCol}">${String.fromCharCode(97+file)}</span>`;
+
+      // legal-move indicator
+      let indicator="";
+      if(selectedSq!==null&&legalTargets.has(sq)){
+        indicator=piece?'<div class="legal-ring"></div>':'<div class="legal-dot"></div>';
+      }
+
+      // piece
+      const pieceHtml=piece?`<span class="pc">${PIECE[piece]}</span>`:"";
+
+      html+=`<div class="sq" data-sq="${sq}" style="background:${bg}">${coords}${indicator}${pieceHtml}</div>`;
+    }
+  }
+
+  board.innerHTML=html;
+
+  // click handlers
+  board.querySelectorAll(".sq[data-sq]").forEach(el=>{
+    el.addEventListener("click",()=>handleClick(parseInt(el.getAttribute("data-sq"))));
+  });
+
+  requestAnimationFrame(()=>setHeight(document.getElementById("root").offsetHeight));
+}
+
+function handleClick(sq){
+  if(!data||data.gameOver)return;
+  const piece=data.position[sq]||null;
+
+  if(selectedSq===null){
+    // Select a piece of current player
+    if(piece&&isPieceTurn(piece)){
+      selectedSq=sq;
+      legalTargets=new Set(data.legalMoves[sq]||[]);
+      renderBoard();
+    }
+  }else{
+    if(sq===selectedSq){
+      // Deselect
+      selectedSq=null;legalTargets=new Set();renderBoard();
+    }else if(legalTargets.has(sq)){
+      // Move!
+      if(needsPromotion(selectedSq,sq)){
+        showPromotionPicker(selectedSq,sq);
+      }else{
+        sendMove(selectedSq,sq,null);
+      }
+    }else if(piece&&isPieceTurn(piece)){
+      // Re-select different piece
+      selectedSq=sq;
+      legalTargets=new Set(data.legalMoves[sq]||[]);
+      renderBoard();
+    }else{
+      selectedSq=null;legalTargets=new Set();renderBoard();
+    }
+  }
+}
+
+function needsPromotion(from,to){
+  const p=data.position[from];
+  if(!p)return false;
+  const toRank=sqRank(to);
+  if(p==="P"&&toRank===7)return true;
+  if(p==="p"&&toRank===0)return true;
+  return false;
+}
+
+function showPromotionPicker(from,to){
+  const isWhite=data.position[from]==="P";
+  const pieces=isWhite?["Q","R","B","N"]:["q","r","b","n"];
+  const types=["q","r","b","n"];
+
+  const overlay=document.createElement("div");
+  overlay.className="promo-overlay";
+  overlay.addEventListener("click",e=>{
+    if(e.target===overlay){overlay.remove();selectedSq=null;legalTargets=new Set();renderBoard();}
+  });
+
+  const box=document.createElement("div");
+  box.className="promo-box";
+  pieces.forEach((pc,i)=>{
+    const btn=document.createElement("div");
+    btn.className="promo-btn";
+    btn.textContent=PIECE[pc];
+    btn.addEventListener("click",()=>{overlay.remove();sendMove(from,to,types[i]);});
+    box.appendChild(btn);
+  });
+
+  overlay.appendChild(box);
+  document.getElementById("root").appendChild(overlay);
+}
+
+function sendMove(from,to,promotion){
+  selectedSq=null;legalTargets=new Set();
+  setVal({from:from,to:to,promotion:promotion,ts:Date.now()});
+}
+
+// ---- Streamlit render handler ----
+window.addEventListener("message",event=>{
+  if(event.data.type!=="streamlit:render")return;
+  data=event.data.args.data;
+  // Reset selection when board state changes (new render from Python)
+  selectedSq=null;legalTargets=new Set();
+  renderBoard();
+});
+
+ready();
+</script>
+</body>
+</html>

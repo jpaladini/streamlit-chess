@@ -1,7 +1,9 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import chess
 import csv
 import io
+import os
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
@@ -10,7 +12,19 @@ from datetime import datetime
 st.set_page_config(page_title="Chess", page_icon="♟", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Piece maps & theme
+# Custom board component (JS handles click-to-move, no page reloads)
+# ---------------------------------------------------------------------------
+_COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chess_component")
+_chess_board_func = components.declare_component("chess_board", path=_COMPONENT_DIR)
+
+
+def chess_board_widget(data: dict, key: str = "board"):
+    """Render the interactive chess board. Returns move dict or None."""
+    return _chess_board_func(data=data, key=key, default=None)
+
+
+# ---------------------------------------------------------------------------
+# Piece maps & values
 # ---------------------------------------------------------------------------
 PIECE_UNICODE = {
     "P": "♙", "N": "♘", "B": "♗", "R": "♖", "Q": "♕", "K": "♔",
@@ -21,13 +35,6 @@ PIECE_VALUE = {
     chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
     chess.ROOK: 5, chess.QUEEN: 9,
 }
-
-# Chess.com green theme
-LIGHT_SQ = "#eeeed2"
-DARK_SQ = "#769656"
-LAST_MOVE_LIGHT = "#f6f669"
-LAST_MOVE_DARK = "#baca2b"
-CHECK_SQ = "#e84040"
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -41,6 +48,7 @@ def _init_state():
         "black_player": "Player 2",
         "game_name": "",
         "flip_board": False,
+        "_last_move_ts": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -71,14 +79,6 @@ def undo_move():
     if b.move_stack:
         b.pop()
         st.session_state.move_history.pop()
-
-
-def last_move_squares() -> tuple[int | None, int | None]:
-    b: chess.Board = st.session_state.board
-    if b.move_stack:
-        m = b.peek()
-        return m.from_square, m.to_square
-    return None, None
 
 
 def get_captured_pieces() -> tuple[list[str], list[str]]:
@@ -126,6 +126,49 @@ def material_advantage() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Board data for component
+# ---------------------------------------------------------------------------
+
+def get_board_data() -> dict:
+    """Build the data dict the JS component needs."""
+    b: chess.Board = st.session_state.board
+
+    # Position: {square_int: piece_symbol}
+    position = {}
+    for sq in chess.SQUARES:
+        p = b.piece_at(sq)
+        if p:
+            position[sq] = p.symbol()
+
+    # Legal moves grouped by from-square (deduped for promotions)
+    legal_by_sq: dict[int, list[int]] = {}
+    for m in b.legal_moves:
+        legal_by_sq.setdefault(m.from_square, set()).add(m.to_square)
+    legal_by_sq = {k: list(v) for k, v in legal_by_sq.items()}
+
+    # Last move
+    last_move = None
+    if b.move_stack:
+        lm = b.peek()
+        last_move = [lm.from_square, lm.to_square]
+
+    # Check square
+    check_sq = None
+    if b.is_check():
+        check_sq = b.king(b.turn)
+
+    return {
+        "position": position,
+        "legalMoves": legal_by_sq,
+        "lastMove": last_move,
+        "checkSquare": check_sq,
+        "flipped": st.session_state.flip_board,
+        "turn": "w" if b.turn == chess.WHITE else "b",
+        "gameOver": b.is_game_over(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # CSV export / import
 # ---------------------------------------------------------------------------
 
@@ -167,54 +210,6 @@ def load_game_from_csv(csv_text: str):
     st.session_state.white_player = white
     st.session_state.black_player = black
     st.session_state.game_name = name
-
-
-# ---------------------------------------------------------------------------
-# Board HTML rendering
-# ---------------------------------------------------------------------------
-
-def render_board_html() -> str:
-    b: chess.Board = st.session_state.board
-    flipped = st.session_state.flip_board
-    last_from, last_to = last_move_squares()
-
-    check_sq = None
-    if b.is_check():
-        check_sq = b.king(b.turn)
-
-    ranks = range(7, -1, -1) if not flipped else range(8)
-    files_range = range(8) if not flipped else range(7, -1, -1)
-
-    squares = ""
-    for rank in ranks:
-        for file_idx, file in enumerate(files_range):
-            sq = chess.square(file, rank)
-            piece = b.piece_at(sq)
-            is_light = (file + rank) % 2 == 1
-
-            if sq == check_sq:
-                bg = CHECK_SQ
-            elif sq == last_from or sq == last_to:
-                bg = LAST_MOVE_LIGHT if is_light else LAST_MOVE_DARK
-            else:
-                bg = LIGHT_SQ if is_light else DARK_SQ
-
-            coord_color = DARK_SQ if is_light else LIGHT_SQ
-            coords = ""
-            if file_idx == 0:
-                coords += f'<span class="coord rank-lbl" style="color:{coord_color}">{rank + 1}</span>'
-            if rank == (0 if not flipped else 7):
-                coords += f'<span class="coord file-lbl" style="color:{coord_color}">{chr(ord("a") + file)}</span>'
-
-            piece_html = ""
-            if piece:
-                symbol = PIECE_UNICODE[piece.symbol()]
-                pc = "pw" if piece.color == chess.WHITE else "pb"
-                piece_html = f'<span class="pc {pc}">{symbol}</span>'
-
-            squares += f'<div class="sq" style="background:{bg}">{coords}{piece_html}</div>'
-
-    return f'<div class="chess-board">{squares}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -276,181 +271,62 @@ def captured_html() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# CSS
+# CSS (for elements outside the board component)
 # ---------------------------------------------------------------------------
 
 CUSTOM_CSS = """
 <style>
-/* ---- Chess board ---- */
-.chess-board {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    width: 100%;
-    max-width: 520px;
-    aspect-ratio: 1;
-    border-radius: 6px;
-    overflow: hidden;
-    box-shadow: 0 8px 32px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.12);
-    border: 3px solid #564332;
-    margin: 0 auto;
-}
-.sq {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    user-select: none;
-}
-.sq .pc {
-    font-size: clamp(1.8rem, 5.5vw, 3.2rem);
-    line-height: 1;
-    filter: drop-shadow(1px 1px 1px rgba(0,0,0,.25));
-    z-index: 1;
-}
-.sq .coord {
-    position: absolute;
-    font-size: .62rem;
-    font-weight: 700;
-    font-family: system-ui, sans-serif;
-    opacity: .82;
-    z-index: 2;
-    pointer-events: none;
-}
-.sq .rank-lbl { top: 3px; left: 4px; }
-.sq .file-lbl { bottom: 2px; right: 4px; }
-
 /* ---- Captured pieces ---- */
 .cap-row {
-    display: flex;
-    align-items: center;
-    gap: 1px;
-    font-size: 1.05rem;
-    min-height: 1.5rem;
-    padding: 2px 0;
-    opacity: .82;
-    max-width: 520px;
-    margin: 0 auto;
+    display: flex; align-items: center; gap: 1px;
+    font-size: 1.05rem; min-height: 1.5rem;
+    padding: 2px 0; opacity: .82;
+    max-width: 520px; margin: 0 auto;
 }
-.cap-adv {
-    font-size: .72rem;
-    font-weight: 600;
-    color: #888;
-    margin-left: 4px;
-}
+.cap-adv { font-size: .72rem; font-weight: 600; color: #888; margin-left: 4px; }
 
 /* ---- Turn indicator ---- */
 .turn-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 18px;
-    border-radius: 999px;
-    font-weight: 600;
-    font-size: .88rem;
-    letter-spacing: .02em;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 18px; border-radius: 999px;
+    font-weight: 600; font-size: .88rem; letter-spacing: .02em;
 }
-.turn-w {
-    background: #fff;
-    color: #333;
-    border: 2px solid #ddd;
-    box-shadow: 0 1px 4px rgba(0,0,0,.06);
-}
-.turn-b {
-    background: #333;
-    color: #fff;
-    border: 2px solid #333;
-    box-shadow: 0 1px 4px rgba(0,0,0,.12);
-}
-.turn-end {
-    background: linear-gradient(135deg, #e74c3c, #c0392b);
-    color: #fff;
-    border: 2px solid #c0392b;
-}
-.dot {
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    display: inline-block;
-    animation: pulse 1.6s ease-in-out infinite;
-}
+.turn-w { background: #fff; color: #333; border: 2px solid #ddd; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.turn-b { background: #333; color: #fff; border: 2px solid #333; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.turn-end { background: linear-gradient(135deg, #e74c3c, #c0392b); color: #fff; border: 2px solid #c0392b; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
 .dot-w { background: #333; }
 .dot-b { background: #fff; }
-@keyframes pulse {
-    0%,100% { opacity:1; }
-    50% { opacity:.35; }
-}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
 /* ---- Move list ---- */
 .ml-container {
     font-family: 'SF Mono','Fira Code','Consolas', monospace;
-    font-size: .8rem;
-    max-height: 340px;
-    overflow-y: auto;
-    border: 1px solid #e2e2e2;
-    border-radius: 8px;
-    background: #fafafa;
+    font-size: .8rem; max-height: 340px; overflow-y: auto;
+    border: 1px solid #e2e2e2; border-radius: 8px; background: #fafafa;
 }
-.ml-row {
-    display: flex;
-    padding: 4px 10px;
-    align-items: center;
-}
+.ml-row { display: flex; padding: 4px 10px; align-items: center; }
 .ml-row:nth-child(odd) { background: #f2f2f2; }
-.ml-num {
-    color: #999;
-    min-width: 30px;
-    font-weight: 500;
-}
-.ml-w, .ml-b {
-    min-width: 58px;
-    padding: 2px 6px;
-    border-radius: 3px;
-}
-.ml-last {
-    background: #d4edda;
-    font-weight: 600;
-}
-.ml-empty {
-    color: #aaa;
-    font-style: italic;
-    text-align: center;
-    padding: 16px;
-}
+.ml-num { color: #999; min-width: 30px; font-weight: 500; }
+.ml-w, .ml-b { min-width: 58px; padding: 2px 6px; border-radius: 3px; }
+.ml-last { background: #d4edda; font-weight: 600; }
+.ml-empty { color: #aaa; font-style: italic; text-align: center; padding: 16px; }
 
 /* ---- Panel headers ---- */
 .ph {
-    font-size: .78rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: #888;
-    margin-bottom: 6px;
-    padding-bottom: 4px;
-    border-bottom: 2px solid #eee;
+    font-size: .78rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: #888; margin-bottom: 6px;
+    padding-bottom: 4px; border-bottom: 2px solid #eee;
 }
 
 /* ---- App header ---- */
-.app-hdr {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: .3rem;
-}
-.app-hdr h1 {
-    font-size: 1.55rem;
-    font-weight: 700;
-    color: #2c3e50;
-    margin: 0;
-    letter-spacing: -.02em;
-}
-.app-hdr .sub {
-    font-size: .78rem;
-    color: #aaa;
-}
+.app-hdr { display: flex; align-items: baseline; gap: 10px; margin-bottom: .3rem; }
+.app-hdr h1 { font-size: 1.55rem; font-weight: 700; color: #2c3e50; margin: 0; letter-spacing: -.02em; }
+.app-hdr .sub { font-size: .78rem; color: #aaa; }
 
 /* ---- Misc ---- */
-#MainMenu {visibility:hidden;}
-footer {visibility:hidden;}
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
 </style>
 """
 
@@ -474,12 +350,30 @@ with col_board:
 
     top_cap, bot_cap = captured_html()
     st.markdown(top_cap, unsafe_allow_html=True)
-    st.markdown(render_board_html(), unsafe_allow_html=True)
+
+    # Interactive board component (selection & highlighting in JS — no reload)
+    result = chess_board_widget(get_board_data(), key="board")
+
+    # Process move from component (only if it's a new click)
+    if result is not None:
+        ts = result.get("ts")
+        if ts != st.session_state.get("_last_move_ts"):
+            st.session_state._last_move_ts = ts
+            from_sq = result["from"]
+            to_sq = result["to"]
+            promo_str = result.get("promotion")
+            promo_map = {"q": chess.QUEEN, "r": chess.ROOK, "b": chess.BISHOP, "n": chess.KNIGHT}
+            promotion = promo_map.get(promo_str) if promo_str else None
+            move = chess.Move(from_sq, to_sq, promotion=promotion)
+            if move in board.legal_moves:
+                make_move(move)
+                st.rerun()
+
     st.markdown(bot_cap, unsafe_allow_html=True)
 
     st.write("")
 
-    # Move input
+    # Selectbox as alternative input
     if not board.is_game_over():
         legal_moves = list(board.legal_moves)
         if legal_moves:
@@ -494,7 +388,7 @@ with col_board:
                     "Move",
                     options=sorted_sans,
                     index=None,
-                    placeholder="Choose a move…",
+                    placeholder="or type a move…",
                     key="move_select",
                     label_visibility="collapsed",
                 )
@@ -543,11 +437,11 @@ with col_panel:
                 value=st.session_state.game_name,
                 key="inp_name",
             )
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.download_button(
                 "⬇ Download CSV",
                 data=game_to_csv(),
-                file_name=f"chess_{ts}.csv",
+                file_name=f"chess_{ts_str}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
