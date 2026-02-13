@@ -573,32 +573,6 @@ with col_board:
 
     st.write("")
 
-    # Selectbox as alternative input (only when it's your turn)
-    if not board.is_game_over() and is_my_turn():
-        legal_moves = list(board.legal_moves)
-        if legal_moves:
-            move_sans = [board.san(m) for m in legal_moves]
-            pairs = sorted(zip(move_sans, legal_moves))
-            sorted_sans = [s for s, _ in pairs]
-            sorted_moves = [m for _, m in pairs]
-
-            mc = st.columns([3, 1])
-            with mc[0]:
-                sel = st.selectbox(
-                    "Move",
-                    options=sorted_sans,
-                    index=None,
-                    placeholder="or type a move…",
-                    key="move_select",
-                    label_visibility="collapsed",
-                )
-            with mc[1]:
-                if st.button("Play ▶", use_container_width=True, type="primary"):
-                    if sel:
-                        move = sorted_moves[sorted_sans.index(sel)]
-                        make_move(move)
-                        st.rerun()
-
     # Controls
     is_multiplayer = st.session_state.game_mode == "multiplayer"
     bc = st.columns(3)
