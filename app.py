@@ -10,49 +10,45 @@ from datetime import datetime
 st.set_page_config(page_title="Chess", page_icon="♟", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Unicode piece map & square colours
+# Piece maps & theme
 # ---------------------------------------------------------------------------
 PIECE_UNICODE = {
     "P": "♙", "N": "♘", "B": "♗", "R": "♖", "Q": "♕", "K": "♔",
     "p": "♟", "n": "♞", "b": "♝", "r": "♜", "q": "♛", "k": "♚",
 }
 
-LIGHT_SQ = "#f0d9b5"
-DARK_SQ = "#b58863"
-SELECTED_SQ = "#7fc97f"
-LEGAL_MOVE_SQ = "#aad576"
-LAST_MOVE_FROM = "#cdd26a80"
-LAST_MOVE_TO = "#cdd26a80"
+PIECE_VALUE = {
+    chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+    chess.ROOK: 5, chess.QUEEN: 9,
+}
+
+# Chess.com green theme
+LIGHT_SQ = "#eeeed2"
+DARK_SQ = "#769656"
+LAST_MOVE_LIGHT = "#f6f669"
+LAST_MOVE_DARK = "#baca2b"
+CHECK_SQ = "#e84040"
 
 # ---------------------------------------------------------------------------
-# Session state helpers
+# Session state
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    """Ensure every session-state key exists."""
-    if "board" not in st.session_state:
-        st.session_state.board = chess.Board()
-    if "move_history" not in st.session_state:
-        st.session_state.move_history = []  # list of UCI strings
-    if "selected_square" not in st.session_state:
-        st.session_state.selected_square = None
-    if "white_player" not in st.session_state:
-        st.session_state.white_player = "Player 1"
-    if "black_player" not in st.session_state:
-        st.session_state.black_player = "Player 2"
-    if "game_name" not in st.session_state:
-        st.session_state.game_name = ""
-    if "flip_board" not in st.session_state:
-        st.session_state.flip_board = False
-    if "promotion_pending" not in st.session_state:
-        st.session_state.promotion_pending = None  # (from_sq, to_sq) awaiting promotion choice
+    defaults = {
+        "board": chess.Board(),
+        "move_history": [],
+        "white_player": "Player 1",
+        "black_player": "Player 2",
+        "game_name": "",
+        "flip_board": False,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
 
 _init_state()
-
-# Shortcuts
 board: chess.Board = st.session_state.board
-
 
 # ---------------------------------------------------------------------------
 # Core logic
@@ -61,41 +57,13 @@ board: chess.Board = st.session_state.board
 def reset_game():
     st.session_state.board = chess.Board()
     st.session_state.move_history = []
-    st.session_state.selected_square = None
-    st.session_state.promotion_pending = None
 
 
-def try_make_move(from_sq: int, to_sq: int, promotion: chess.PieceType | None = None):
-    """Attempt to push a move. Returns True on success."""
+def make_move(move: chess.Move):
     b: chess.Board = st.session_state.board
-    move = chess.Move(from_sq, to_sq, promotion=promotion)
-    if move in b.legal_moves:
-        san = b.san(move)
-        b.push(move)
-        st.session_state.move_history.append(
-            {"uci": move.uci(), "san": san}
-        )
-        st.session_state.selected_square = None
-        st.session_state.promotion_pending = None
-        return True
-    return False
-
-
-def needs_promotion(from_sq: int, to_sq: int) -> bool:
-    """Check if a pawn move to the last rank requires promotion."""
-    b: chess.Board = st.session_state.board
-    piece = b.piece_at(from_sq)
-    if piece is None or piece.piece_type != chess.PAWN:
-        return False
-    target_rank = chess.square_rank(to_sq)
-    if (piece.color == chess.WHITE and target_rank == 7) or (
-        piece.color == chess.BLACK and target_rank == 0
-    ):
-        # Verify at least one promotion variant is legal
-        for pt in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]:
-            if chess.Move(from_sq, to_sq, promotion=pt) in b.legal_moves:
-                return True
-    return False
+    san = b.san(move)
+    b.push(move)
+    st.session_state.move_history.append({"uci": move.uci(), "san": san})
 
 
 def undo_move():
@@ -103,22 +71,6 @@ def undo_move():
     if b.move_stack:
         b.pop()
         st.session_state.move_history.pop()
-        st.session_state.selected_square = None
-        st.session_state.promotion_pending = None
-
-
-def square_name(sq: int) -> str:
-    return chess.square_name(sq)
-
-
-def get_legal_target_squares(sq: int) -> set[int]:
-    """Return set of target squares the piece on *sq* can legally move to."""
-    b: chess.Board = st.session_state.board
-    targets: set[int] = set()
-    for m in b.legal_moves:
-        if m.from_square == sq:
-            targets.add(m.to_square)
-    return targets
 
 
 def last_move_squares() -> tuple[int | None, int | None]:
@@ -129,60 +81,198 @@ def last_move_squares() -> tuple[int | None, int | None]:
     return None, None
 
 
+def get_captured_pieces() -> tuple[list[str], list[str]]:
+    """Return (captured_white_pieces, captured_black_pieces)."""
+    initial = chess.Board()
+    current = st.session_state.board
+
+    def count_pieces(b: chess.Board):
+        white, black = {}, {}
+        for sq in chess.SQUARES:
+            p = b.piece_at(sq)
+            if p:
+                d = white if p.color == chess.WHITE else black
+                d[p.piece_type] = d.get(p.piece_type, 0) + 1
+        return white, black
+
+    iw, ib = count_pieces(initial)
+    cw, cb = count_pieces(current)
+
+    captured_white: list[str] = []
+    captured_black: list[str] = []
+    for pt in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT, chess.PAWN]:
+        for _ in range(iw.get(pt, 0) - cw.get(pt, 0)):
+            captured_white.append(PIECE_UNICODE[chess.Piece(pt, chess.WHITE).symbol()])
+        for _ in range(ib.get(pt, 0) - cb.get(pt, 0)):
+            captured_black.append(PIECE_UNICODE[chess.Piece(pt, chess.BLACK).symbol()])
+
+    return captured_white, captured_black
+
+
+def material_advantage() -> int:
+    """Positive = white ahead, negative = black ahead."""
+    brd: chess.Board = st.session_state.board
+    white_mat = 0
+    black_mat = 0
+    for sq in chess.SQUARES:
+        piece = brd.piece_at(sq)
+        if piece and piece.piece_type != chess.KING:
+            val = PIECE_VALUE.get(piece.piece_type, 0)
+            if piece.color == chess.WHITE:
+                white_mat += val
+            else:
+                black_mat += val
+    return white_mat - black_mat
+
+
 # ---------------------------------------------------------------------------
 # CSV export / import
 # ---------------------------------------------------------------------------
 
 def game_to_csv() -> str:
-    """Serialise current game to CSV string."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
         "move_number", "uci", "san", "fen_after",
         "white_player", "black_player", "game_name", "timestamp",
     ])
-    # Replay moves to capture FEN after each move
     replay = chess.Board()
     for i, entry in enumerate(st.session_state.move_history):
         replay.push(chess.Move.from_uci(entry["uci"]))
         writer.writerow([
-            i + 1,
-            entry["uci"],
-            entry["san"],
-            replay.fen(),
-            st.session_state.white_player,
-            st.session_state.black_player,
-            st.session_state.game_name,
-            datetime.now().isoformat(),
+            i + 1, entry["uci"], entry["san"], replay.fen(),
+            st.session_state.white_player, st.session_state.black_player,
+            st.session_state.game_name, datetime.now().isoformat(),
         ])
     return buf.getvalue()
 
 
 def load_game_from_csv(csv_text: str):
-    """Restore a game from a previously exported CSV."""
     reader = csv.DictReader(io.StringIO(csv_text))
     new_board = chess.Board()
-    history = []
+    history: list[dict] = []
     white = "Player 1"
     black = "Player 2"
     name = ""
     for row in reader:
         uci = row["uci"]
         san = row["san"]
-        move = chess.Move.from_uci(uci)
-        new_board.push(move)
+        new_board.push(chess.Move.from_uci(uci))
         history.append({"uci": uci, "san": san})
         white = row.get("white_player", white)
         black = row.get("black_player", black)
         name = row.get("game_name", name)
-
     st.session_state.board = new_board
     st.session_state.move_history = history
-    st.session_state.selected_square = None
-    st.session_state.promotion_pending = None
     st.session_state.white_player = white
     st.session_state.black_player = black
     st.session_state.game_name = name
+
+
+# ---------------------------------------------------------------------------
+# Board HTML rendering
+# ---------------------------------------------------------------------------
+
+def render_board_html() -> str:
+    b: chess.Board = st.session_state.board
+    flipped = st.session_state.flip_board
+    last_from, last_to = last_move_squares()
+
+    check_sq = None
+    if b.is_check():
+        check_sq = b.king(b.turn)
+
+    ranks = range(7, -1, -1) if not flipped else range(8)
+    files_range = range(8) if not flipped else range(7, -1, -1)
+
+    squares = ""
+    for rank in ranks:
+        for file_idx, file in enumerate(files_range):
+            sq = chess.square(file, rank)
+            piece = b.piece_at(sq)
+            is_light = (file + rank) % 2 == 1
+
+            if sq == check_sq:
+                bg = CHECK_SQ
+            elif sq == last_from or sq == last_to:
+                bg = LAST_MOVE_LIGHT if is_light else LAST_MOVE_DARK
+            else:
+                bg = LIGHT_SQ if is_light else DARK_SQ
+
+            coord_color = DARK_SQ if is_light else LIGHT_SQ
+            coords = ""
+            if file_idx == 0:
+                coords += f'<span class="coord rank-lbl" style="color:{coord_color}">{rank + 1}</span>'
+            if rank == (0 if not flipped else 7):
+                coords += f'<span class="coord file-lbl" style="color:{coord_color}">{chr(ord("a") + file)}</span>'
+
+            piece_html = ""
+            if piece:
+                symbol = PIECE_UNICODE[piece.symbol()]
+                pc = "pw" if piece.color == chess.WHITE else "pb"
+                piece_html = f'<span class="pc {pc}">{symbol}</span>'
+
+            squares += f'<div class="sq" style="background:{bg}">{coords}{piece_html}</div>'
+
+    return f'<div class="chess-board">{squares}</div>'
+
+
+# ---------------------------------------------------------------------------
+# Status & move list HTML
+# ---------------------------------------------------------------------------
+
+def game_status_html() -> str:
+    b: chess.Board = st.session_state.board
+    if b.is_checkmate():
+        winner = "Black" if b.turn == chess.WHITE else "White"
+        return f'<div class="turn-pill turn-end">Checkmate &mdash; {winner} wins!</div>'
+    if b.is_stalemate():
+        return '<div class="turn-pill turn-end">Stalemate &mdash; Draw</div>'
+    if b.is_insufficient_material():
+        return '<div class="turn-pill turn-end">Draw &mdash; Insufficient material</div>'
+    if b.is_seventyfive_moves():
+        return '<div class="turn-pill turn-end">Draw &mdash; 75-move rule</div>'
+    if b.is_fivefold_repetition():
+        return '<div class="turn-pill turn-end">Draw &mdash; Fivefold repetition</div>'
+
+    check = " &mdash; Check!" if b.is_check() else ""
+    if b.turn == chess.WHITE:
+        return f'<div class="turn-pill turn-w"><span class="dot dot-w"></span>White to move{check}</div>'
+    return f'<div class="turn-pill turn-b"><span class="dot dot-b"></span>Black to move{check}</div>'
+
+
+def move_list_html() -> str:
+    history = st.session_state.move_history
+    if not history:
+        return '<div class="ml-empty">No moves yet</div>'
+    total = len(history)
+    rows = ""
+    for i in range(0, total, 2):
+        num = i // 2 + 1
+        w = history[i]["san"]
+        b = history[i + 1]["san"] if i + 1 < total else ""
+        wc = " ml-last" if i == total - 1 else ""
+        bc = " ml-last" if i + 1 == total - 1 else ""
+        rows += (
+            f'<div class="ml-row">'
+            f'<span class="ml-num">{num}.</span>'
+            f'<span class="ml-w{wc}">{w}</span>'
+            f'<span class="ml-b{bc}">{b}</span>'
+            f'</div>'
+        )
+    return f'<div class="ml-container">{rows}</div>'
+
+
+def captured_html() -> tuple[str, str]:
+    captured_white, captured_black = get_captured_pieces()
+    adv = material_advantage()
+
+    bk_adv = f'<span class="cap-adv">+{-adv}</span>' if adv < 0 else ""
+    wh_adv = f'<span class="cap-adv">+{adv}</span>' if adv > 0 else ""
+
+    top = f'<div class="cap-row">{"".join(captured_white)}{bk_adv}</div>'
+    bot = f'<div class="cap-row">{"".join(captured_black)}{wh_adv}</div>'
+    return top, bot
 
 
 # ---------------------------------------------------------------------------
@@ -191,192 +281,178 @@ def load_game_from_csv(csv_text: str):
 
 CUSTOM_CSS = """
 <style>
-    /* board wrapper */
-    .chess-board {
-        display: grid;
-        grid-template-columns: repeat(8, 1fr);
-        max-width: 560px;
-        border: 3px solid #333;
-        border-radius: 4px;
-        overflow: hidden;
-        box-shadow: 0 4px 24px rgba(0,0,0,.35);
-    }
-    .chess-sq {
-        aspect-ratio: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 2.6rem;
-        user-select: none;
-        position: relative;
-    }
-    .chess-sq .coord {
-        position: absolute;
-        font-size: .55rem;
-        opacity: .55;
-        font-weight: 700;
-        font-family: monospace;
-    }
-    .chess-sq .coord-file { bottom: 2px; right: 4px; }
-    .chess-sq .coord-rank { top: 2px; left: 4px; }
+/* ---- Chess board ---- */
+.chess-board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    width: 100%;
+    max-width: 520px;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.12);
+    border: 3px solid #564332;
+    margin: 0 auto;
+}
+.sq {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    user-select: none;
+}
+.sq .pc {
+    font-size: clamp(1.8rem, 5.5vw, 3.2rem);
+    line-height: 1;
+    filter: drop-shadow(1px 1px 1px rgba(0,0,0,.25));
+    z-index: 1;
+}
+.sq .coord {
+    position: absolute;
+    font-size: .62rem;
+    font-weight: 700;
+    font-family: system-ui, sans-serif;
+    opacity: .82;
+    z-index: 2;
+    pointer-events: none;
+}
+.sq .rank-lbl { top: 3px; left: 4px; }
+.sq .file-lbl { bottom: 2px; right: 4px; }
 
-    /* move list */
-    .move-list {
-        font-family: 'SF Mono', 'Fira Code', monospace;
-        font-size: .85rem;
-        max-height: 420px;
-        overflow-y: auto;
-        padding: .25rem .5rem;
-    }
-    .move-list .move-num {
-        color: #999;
-        min-width: 2rem;
-        display: inline-block;
-    }
+/* ---- Captured pieces ---- */
+.cap-row {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    font-size: 1.05rem;
+    min-height: 1.5rem;
+    padding: 2px 0;
+    opacity: .82;
+    max-width: 520px;
+    margin: 0 auto;
+}
+.cap-adv {
+    font-size: .72rem;
+    font-weight: 600;
+    color: #888;
+    margin-left: 4px;
+}
 
-    /* status badge */
-    .status-badge {
-        display: inline-block;
-        padding: .25rem .75rem;
-        border-radius: 999px;
-        font-weight: 600;
-        font-size: .9rem;
-    }
-    .status-white { background: #fff; color: #222; border: 2px solid #ccc; }
-    .status-black { background: #333; color: #fff; border: 2px solid #333; }
-    .status-end   { background: #e74c3c; color: #fff; }
+/* ---- Turn indicator ---- */
+.turn-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 18px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: .88rem;
+    letter-spacing: .02em;
+}
+.turn-w {
+    background: #fff;
+    color: #333;
+    border: 2px solid #ddd;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+.turn-b {
+    background: #333;
+    color: #fff;
+    border: 2px solid #333;
+    box-shadow: 0 1px 4px rgba(0,0,0,.12);
+}
+.turn-end {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: #fff;
+    border: 2px solid #c0392b;
+}
+.dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse 1.6s ease-in-out infinite;
+}
+.dot-w { background: #333; }
+.dot-b { background: #fff; }
+@keyframes pulse {
+    0%,100% { opacity:1; }
+    50% { opacity:.35; }
+}
 
-    /* hide default streamlit button styling on board squares */
-    div[data-testid="stHorizontalBlock"] button {
-        padding: 0 !important;
-        margin: 0 !important;
-    }
+/* ---- Move list ---- */
+.ml-container {
+    font-family: 'SF Mono','Fira Code','Consolas', monospace;
+    font-size: .8rem;
+    max-height: 340px;
+    overflow-y: auto;
+    border: 1px solid #e2e2e2;
+    border-radius: 8px;
+    background: #fafafa;
+}
+.ml-row {
+    display: flex;
+    padding: 4px 10px;
+    align-items: center;
+}
+.ml-row:nth-child(odd) { background: #f2f2f2; }
+.ml-num {
+    color: #999;
+    min-width: 30px;
+    font-weight: 500;
+}
+.ml-w, .ml-b {
+    min-width: 58px;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.ml-last {
+    background: #d4edda;
+    font-weight: 600;
+}
+.ml-empty {
+    color: #aaa;
+    font-style: italic;
+    text-align: center;
+    padding: 16px;
+}
+
+/* ---- Panel headers ---- */
+.ph {
+    font-size: .78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #888;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 2px solid #eee;
+}
+
+/* ---- App header ---- */
+.app-hdr {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: .3rem;
+}
+.app-hdr h1 {
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: #2c3e50;
+    margin: 0;
+    letter-spacing: -.02em;
+}
+.app-hdr .sub {
+    font-size: .78rem;
+    color: #aaa;
+}
+
+/* ---- Misc ---- */
+#MainMenu {visibility:hidden;}
+footer {visibility:hidden;}
 </style>
 """
-
-# ---------------------------------------------------------------------------
-# Board rendering (pure HTML – click handled via st.columns + buttons)
-# ---------------------------------------------------------------------------
-
-def render_board():
-    """Draw the board using an 8×8 grid of Streamlit buttons."""
-    b: chess.Board = st.session_state.board
-    selected = st.session_state.selected_square
-    legal_targets = get_legal_target_squares(selected) if selected is not None else set()
-    last_from, last_to = last_move_squares()
-    flipped = st.session_state.flip_board
-
-    ranks = range(7, -1, -1) if not flipped else range(8)
-    files = range(8) if not flipped else range(7, -1, -1)
-
-    for rank in ranks:
-        cols = st.columns(8, gap="small")
-        for idx, file in enumerate(files):
-            sq = chess.square(file, rank)
-            piece = b.piece_at(sq)
-
-            # Determine background colour
-            is_light = (file + rank) % 2 == 1
-            if sq == selected:
-                bg = SELECTED_SQ
-            elif sq in legal_targets:
-                bg = LEGAL_MOVE_SQ
-            elif sq == last_from or sq == last_to:
-                bg = LAST_MOVE_FROM if sq == last_from else LAST_MOVE_TO
-            else:
-                bg = LIGHT_SQ if is_light else DARK_SQ
-
-            label = PIECE_UNICODE.get(piece.symbol(), "") if piece else ""
-            # Use a small dot for empty legal-target squares
-            if sq in legal_targets and not piece:
-                label = "•"
-
-            with cols[idx]:
-                if st.button(
-                    label,
-                    key=f"sq_{sq}",
-                    use_container_width=True,
-                    help=square_name(sq),
-                ):
-                    handle_square_click(sq)
-                # Inject coloured background via markdown trick
-                st.markdown(
-                    f"""<style>
-                    div[data-testid="stVerticalBlock"] button[kind="secondary"][key="sq_{sq}"] {{
-                        background-color: {bg} !important;
-                    }}
-                    </style>""",
-                    unsafe_allow_html=True,
-                )
-
-
-def handle_square_click(sq: int):
-    """State-machine for piece selection & move execution."""
-    b: chess.Board = st.session_state.board
-    selected = st.session_state.selected_square
-
-    if selected is None:
-        # Select a piece of the current player
-        piece = b.piece_at(sq)
-        if piece and piece.color == b.turn:
-            st.session_state.selected_square = sq
-    else:
-        if sq == selected:
-            # Deselect
-            st.session_state.selected_square = None
-        else:
-            # Try to move
-            if needs_promotion(selected, sq):
-                st.session_state.promotion_pending = (selected, sq)
-            else:
-                if not try_make_move(selected, sq):
-                    # Clicked on own piece → reselect
-                    piece = b.piece_at(sq)
-                    if piece and piece.color == b.turn:
-                        st.session_state.selected_square = sq
-                    else:
-                        st.session_state.selected_square = None
-
-
-# ---------------------------------------------------------------------------
-# Status helpers
-# ---------------------------------------------------------------------------
-
-def game_status_html() -> str:
-    b: chess.Board = st.session_state.board
-    if b.is_checkmate():
-        winner = "Black" if b.turn == chess.WHITE else "White"
-        return f'<span class="status-badge status-end">Checkmate — {winner} wins!</span>'
-    if b.is_stalemate():
-        return '<span class="status-badge status-end">Stalemate — Draw</span>'
-    if b.is_insufficient_material():
-        return '<span class="status-badge status-end">Draw — Insufficient material</span>'
-    if b.is_seventyfive_moves():
-        return '<span class="status-badge status-end">Draw — 75-move rule</span>'
-    if b.is_fivefold_repetition():
-        return '<span class="status-badge status-end">Draw — Fivefold repetition</span>'
-    if b.is_check():
-        if b.turn == chess.WHITE:
-            return '<span class="status-badge status-white">White to move — Check!</span>'
-        return '<span class="status-badge status-black">Black to move — Check!</span>'
-    if b.turn == chess.WHITE:
-        return '<span class="status-badge status-white">White to move</span>'
-    return '<span class="status-badge status-black">Black to move</span>'
-
-
-def move_list_html() -> str:
-    history = st.session_state.move_history
-    if not history:
-        return "<em>No moves yet.</em>"
-    lines = []
-    for i in range(0, len(history), 2):
-        num = i // 2 + 1
-        white_san = history[i]["san"]
-        black_san = history[i + 1]["san"] if i + 1 < len(history) else ""
-        lines.append(
-            f'<span class="move-num">{num}.</span> {white_san}  {black_san}'
-        )
-    return "<br>".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -385,54 +461,68 @@ def move_list_html() -> str:
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# Title
-st.markdown("## ♟ Streamlit Chess")
+st.markdown(
+    '<div class="app-hdr"><h1>&#9823; Chess</h1><span class="sub">Streamlit Edition</span></div>',
+    unsafe_allow_html=True,
+)
 
 col_board, col_panel = st.columns([3, 2], gap="large")
 
+# ---- Board column ----
 with col_board:
     st.markdown(game_status_html(), unsafe_allow_html=True)
+
+    top_cap, bot_cap = captured_html()
+    st.markdown(top_cap, unsafe_allow_html=True)
+    st.markdown(render_board_html(), unsafe_allow_html=True)
+    st.markdown(bot_cap, unsafe_allow_html=True)
+
     st.write("")
 
-    # Promotion dialog (if pending)
-    if st.session_state.promotion_pending:
-        from_sq, to_sq = st.session_state.promotion_pending
-        st.info("Choose promotion piece:")
-        pcols = st.columns(4)
-        promo_map = {
-            "Queen": chess.QUEEN,
-            "Rook": chess.ROOK,
-            "Bishop": chess.BISHOP,
-            "Knight": chess.KNIGHT,
-        }
-        symbols = {"Queen": "♛", "Rook": "♜", "Bishop": "♝", "Knight": "♞"}
-        for i, (name, pt) in enumerate(promo_map.items()):
-            with pcols[i]:
-                if st.button(f"{symbols[name]} {name}", key=f"promo_{name}"):
-                    try_make_move(from_sq, to_sq, promotion=pt)
-                    st.rerun()
+    # Move input
+    if not board.is_game_over():
+        legal_moves = list(board.legal_moves)
+        if legal_moves:
+            move_sans = [board.san(m) for m in legal_moves]
+            pairs = sorted(zip(move_sans, legal_moves))
+            sorted_sans = [s for s, _ in pairs]
+            sorted_moves = [m for _, m in pairs]
 
-    render_board()
+            mc = st.columns([3, 1])
+            with mc[0]:
+                sel = st.selectbox(
+                    "Move",
+                    options=sorted_sans,
+                    index=None,
+                    placeholder="Choose a move…",
+                    key="move_select",
+                    label_visibility="collapsed",
+                )
+            with mc[1]:
+                if st.button("Play ▶", use_container_width=True, type="primary"):
+                    if sel:
+                        move = sorted_moves[sorted_sans.index(sel)]
+                        make_move(move)
+                        st.rerun()
 
-    # Board controls
-    bcols = st.columns(3)
-    with bcols[0]:
-        if st.button("↩ Undo", use_container_width=True):
+    # Controls
+    bc = st.columns(3)
+    with bc[0]:
+        if st.button("↩ Undo", use_container_width=True, disabled=not board.move_stack):
             undo_move()
             st.rerun()
-    with bcols[1]:
-        if st.button("🔄 Flip Board", use_container_width=True):
+    with bc[1]:
+        if st.button("⟳ Flip", use_container_width=True):
             st.session_state.flip_board = not st.session_state.flip_board
             st.rerun()
-    with bcols[2]:
-        if st.button("🗑 New Game", use_container_width=True):
+    with bc[2]:
+        if st.button("New Game", use_container_width=True):
             reset_game()
             st.rerun()
 
-
+# ---- Side panel ----
 with col_panel:
-    # ----- Game info -----
-    st.markdown("#### Game Info")
+    st.markdown('<div class="ph">Players</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         st.session_state.white_player = st.text_input(
@@ -442,71 +532,52 @@ with col_panel:
         st.session_state.black_player = st.text_input(
             "Black", value=st.session_state.black_player, key="inp_black"
         )
-    st.session_state.game_name = st.text_input(
-        "Game name (optional)", value=st.session_state.game_name, key="inp_name"
-    )
 
-    st.markdown("---")
+    st.markdown('<div class="ph">Moves</div>', unsafe_allow_html=True)
+    st.markdown(move_list_html(), unsafe_allow_html=True)
 
-    # ----- Move list -----
-    st.markdown("#### Moves")
-    st.markdown(
-        f'<div class="move-list">{move_list_html()}</div>',
-        unsafe_allow_html=True,
-    )
+    with st.expander("Export Game"):
+        if st.session_state.move_history:
+            st.session_state.game_name = st.text_input(
+                "Game name (optional)",
+                value=st.session_state.game_name,
+                key="inp_name",
+            )
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                "⬇ Download CSV",
+                data=game_to_csv(),
+                file_name=f"chess_{ts}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Make some moves first.")
 
-    st.markdown("---")
-
-    # ----- Export -----
-    st.markdown("#### Export Game")
-    csv_data = game_to_csv()
-    if st.session_state.move_history:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"chess_game_{timestamp}.csv"
-        st.download_button(
-            label="⬇ Download CSV",
-            data=csv_data,
-            file_name=filename,
-            mime="text/csv",
-            use_container_width=True,
+    with st.expander("Import Game"):
+        uploaded = st.file_uploader(
+            "Upload CSV", type=["csv"], key="csv_upload", label_visibility="collapsed",
         )
-    else:
-        st.caption("Make some moves first to export.")
+        if uploaded is not None:
+            if st.button("📂 Load", use_container_width=True):
+                try:
+                    load_game_from_csv(uploaded.getvalue().decode("utf-8"))
+                    st.success("Game loaded!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed: {e}")
 
-    st.markdown("---")
-
-    # ----- Import -----
-    st.markdown("#### Import Game")
-    uploaded = st.file_uploader(
-        "Upload a previously exported CSV",
-        type=["csv"],
-        key="csv_upload",
-    )
-    if uploaded is not None:
-        if st.button("📂 Load Game", use_container_width=True):
-            try:
-                csv_text = uploaded.getvalue().decode("utf-8")
-                load_game_from_csv(csv_text)
-                st.success("Game loaded successfully!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to load game: {e}")
-
-    st.markdown("---")
-
-    # ----- FEN -----
-    st.markdown("#### FEN")
-    st.code(st.session_state.board.fen(), language=None)
-
-    fen_input = st.text_input("Load from FEN", key="fen_input")
-    if fen_input:
-        if st.button("Load FEN", use_container_width=True):
-            try:
-                new_board = chess.Board(fen_input)
-                st.session_state.board = new_board
-                st.session_state.move_history = []
-                st.session_state.selected_square = None
-                st.session_state.promotion_pending = None
-                st.rerun()
-            except ValueError as e:
-                st.error(f"Invalid FEN: {e}")
+    with st.expander("FEN"):
+        st.code(board.fen(), language=None)
+        fen_in = st.text_input(
+            "FEN", key="fen_input", label_visibility="collapsed",
+            placeholder="Paste FEN here…",
+        )
+        if fen_in:
+            if st.button("Load FEN", use_container_width=True):
+                try:
+                    st.session_state.board = chess.Board(fen_in)
+                    st.session_state.move_history = []
+                    st.rerun()
+                except ValueError as e:
+                    st.error(f"Invalid FEN: {e}")
