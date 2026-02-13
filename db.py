@@ -99,6 +99,14 @@ def update_game_move(game_id: str, fen: str, move_history_json: str) -> float:
     return ts
 
 
+def update_player_session(game_id: str, color: str, new_session: str):
+    """Update a player's session ID (used for reconnection)."""
+    col = "white_session" if color == "white" else "black_session"
+    con = _connect()
+    con.execute(f"UPDATE games SET {col} = ? WHERE game_id = ?", [new_session, game_id])
+    con.close()
+
+
 def cleanup_old_games(max_age_hours: int = 24):
     """Remove games older than *max_age_hours*."""
     con = _connect()

@@ -85,6 +85,29 @@ def _init_state():
 
 
 _init_state()
+
+# ---------------------------------------------------------------------------
+# Auto-reconnect from URL query params (?game=ABCD&color=white)
+# ---------------------------------------------------------------------------
+_qp = st.query_params
+if _qp.get("game") and _qp.get("color") and not st.session_state.game_id:
+    _rejoin_id = _qp["game"].upper()
+    _rejoin_color = _qp["color"].lower()
+    _rejoin_game = db.get_game(_rejoin_id)
+    if _rejoin_game and _rejoin_color in ("white", "black"):
+        db.update_player_session(_rejoin_id, _rejoin_color, st.session_state._session_id)
+        st.session_state.game_mode = "multiplayer"
+        st.session_state.game_id = _rejoin_id
+        st.session_state.player_color = _rejoin_color
+        st.session_state.flip_board = _rejoin_color == "black"
+        st.session_state.board = chess.Board(_rejoin_game["fen"])
+        st.session_state.move_history = json.loads(_rejoin_game["move_history"])
+        st.session_state._last_db_ts = _rejoin_game["last_move_ts"]
+        st.session_state.white_player = _rejoin_game["white_player"]
+        st.session_state.black_player = _rejoin_game["black_player"]
+        opp_key = "black_session" if _rejoin_color == "white" else "white_session"
+        st.session_state._opponent_connected = bool(_rejoin_game.get(opp_key))
+
 board: chess.Board = st.session_state.board
 
 # ---------------------------------------------------------------------------
@@ -434,6 +457,7 @@ with st.sidebar:
             st.session_state.player_color = None
             st.session_state._last_db_ts = None
             st.session_state._opponent_connected = False
+            st.query_params.clear()
             reset_game()
         st.session_state.game_mode = new_mode
         st.rerun()
@@ -453,6 +477,7 @@ with st.sidebar:
                 st.session_state.flip_board = False
                 game = db.get_game(gid)
                 st.session_state._last_db_ts = game["last_move_ts"] if game else None
+                st.query_params.update(game=gid, color="white")
                 st.rerun()
 
             st.markdown("##### Join a game")
@@ -470,6 +495,7 @@ with st.sidebar:
                         st.session_state.board = chess.Board(game["fen"])
                         st.session_state.move_history = json.loads(game["move_history"])
                         st.session_state._last_db_ts = game["last_move_ts"]
+                        st.query_params.update(game=join_code.upper(), color="black")
                         st.rerun()
                     else:
                         st.error("Game not found or already full")
@@ -498,6 +524,7 @@ with st.sidebar:
                 st.session_state.player_color = None
                 st.session_state._last_db_ts = None
                 st.session_state._opponent_connected = False
+                st.query_params.clear()
                 reset_game()
                 st.rerun()
 
