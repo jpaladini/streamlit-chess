@@ -619,14 +619,18 @@ with col_panel:
             name_slug = st.session_state.game_name.strip().replace(" ", "_") or "chess"
             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_data = game_to_csv()
-            st.download_button(
+            dl_count = st.session_state.get("_dl_count", 0)
+            clicked = st.download_button(
                 "⬇ Download CSV",
                 data=csv_data,
                 file_name=f"{name_slug}_{ts_str}.csv",
                 mime="text/csv",
                 use_container_width=True,
-                key=f"_dl_{ts_str}",
+                key=f"_dl_{dl_count}",
             )
+            if clicked:
+                st.session_state._dl_count = dl_count + 1
+                st.rerun()
         else:
             st.caption("Make some moves first.")
 
