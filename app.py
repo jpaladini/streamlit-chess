@@ -90,9 +90,9 @@ _init_state()
 # Auto-reconnect from URL query params (?game=ABCD&color=white)
 # ---------------------------------------------------------------------------
 _qp = st.query_params
-if _qp.get("game") and _qp.get("color") and not st.session_state.game_id:
-    _rejoin_id = _qp["game"].upper()
-    _rejoin_color = _qp["color"].lower()
+if _qp.get("id") and _qp.get("s") and not st.session_state.game_id:
+    _rejoin_id = _qp["id"].upper()
+    _rejoin_color = _qp["s"].lower()
     _rejoin_game = db.get_game(_rejoin_id)
     if _rejoin_game and _rejoin_color in ("white", "black"):
         db.update_player_session(_rejoin_id, _rejoin_color, st.session_state._session_id)
@@ -477,7 +477,7 @@ with st.sidebar:
                 st.session_state.flip_board = False
                 game = db.get_game(gid)
                 st.session_state._last_db_ts = game["last_move_ts"] if game else None
-                st.query_params.update(game=gid, color="white")
+                st.query_params.update(id=gid, s="white")
                 st.rerun()
 
             st.markdown("##### Join a game")
@@ -495,7 +495,7 @@ with st.sidebar:
                         st.session_state.board = chess.Board(game["fen"])
                         st.session_state.move_history = json.loads(game["move_history"])
                         st.session_state._last_db_ts = game["last_move_ts"]
-                        st.query_params.update(game=join_code.upper(), color="black")
+                        st.query_params.update(id=join_code.upper(), s="black")
                         st.rerun()
                     else:
                         st.error("Game not found or already full")
