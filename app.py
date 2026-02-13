@@ -348,7 +348,7 @@ CUSTOM_CSS = """
     display: flex; align-items: center; gap: 1px;
     font-size: 1.05rem; min-height: 1.5rem;
     padding: 2px 0; opacity: .82;
-    max-width: 520px; margin: 0 auto;
+    max-width: 600px; margin: 0 auto;
 }
 .cap-adv { font-size: .72rem; font-weight: 600; color: #888; margin-left: 4px; }
 
@@ -371,12 +371,13 @@ CUSTOM_CSS = """
     font-family: 'SF Mono','Fira Code','Consolas', monospace;
     font-size: .8rem; max-height: 340px; overflow-y: auto;
     border: 1px solid #e2e2e2; border-radius: 8px; background: #fafafa;
+    color: #333;
 }
 .ml-row { display: flex; padding: 4px 10px; align-items: center; }
 .ml-row:nth-child(odd) { background: #f2f2f2; }
-.ml-num { color: #999; min-width: 30px; font-weight: 500; }
-.ml-w, .ml-b { min-width: 58px; padding: 2px 6px; border-radius: 3px; }
-.ml-last { background: #d4edda; font-weight: 600; }
+.ml-num { color: #777; min-width: 30px; font-weight: 500; }
+.ml-w, .ml-b { min-width: 58px; padding: 2px 6px; border-radius: 3px; color: #222; }
+.ml-last { background: #d4edda; font-weight: 600; color: #1a5928; }
 .ml-empty { color: #aaa; font-style: italic; text-align: center; padding: 16px; }
 
 /* ---- Panel headers ---- */
@@ -388,8 +389,7 @@ CUSTOM_CSS = """
 
 /* ---- App header ---- */
 .app-hdr { display: flex; align-items: baseline; gap: 10px; margin-bottom: .3rem; }
-.app-hdr h1 { font-size: 1.55rem; font-weight: 700; color: #2c3e50; margin: 0; letter-spacing: -.02em; }
-.app-hdr .sub { font-size: .78rem; color: #aaa; }
+.app-hdr h1 { font-size: 1.9rem; font-weight: 700; color: #2c3e50; margin: 0; letter-spacing: -.02em; }
 
 /* ---- Game code display ---- */
 .game-code {
@@ -498,7 +498,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 st.markdown(
-    '<div class="app-hdr"><h1>&#9823; Chess</h1><span class="sub">Streamlit Edition</span></div>',
+    '<div class="app-hdr"><h1>&#9823; Chess</h1></div>',
     unsafe_allow_html=True,
 )
 
