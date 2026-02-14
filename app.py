@@ -1,6 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import chess
+import chess_engine as chess
 import csv
 import io
 import os
