@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GAMBIT Chess</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Marcellus&family=Hanken+Grotesk:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- TOP BAR -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">&#9822;</div>
+      <div class="logo-text">
+        <span class="logo-name">GAMBIT</span>
+        <span class="logo-sub" id="direction-label">Obsidian Edition</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="seg-switch">
+        <button class="seg-btn active" id="btn-dir-a">Obsidian</button>
+        <button class="seg-btn" id="btn-dir-b">Midnight</button>
+      </div>
+      <div class="swatch-group" id="swatch-group"></div>
+      <button class="icon-btn" id="btn-mode" title="Toggle light / dark">&#9728;</button>
+      <button class="accent-btn" id="btn-lobby">&#9876; Multiplayer</button>
+    </div>
+  </header>
+
+  <!-- GAME AREA -->
+  <main>
+    <section class="board-col">
+      <div id="player-top" class="player-strip"></div>
+      <div class="board-wrap" id="board-wrap">
+        <div id="board"></div>
+        <div id="promo-overlay" class="hidden"></div>
+        <div id="gameover-overlay" class="hidden"></div>
+      </div>
+      <div id="player-bot" class="player-strip"></div>
+    </section>
+
+    <aside id="panel">
+      <!-- Status -->
+      <div class="card" id="status-card">
+        <div class="status-inner">
+          <div class="status-left">
+            <span class="turn-dot" id="turn-dot"></span>
+            <div>
+              <div class="status-kicker" id="status-kicker">To move</div>
+              <div class="status-main" id="status-main">White</div>
+            </div>
+          </div>
+          <div class="status-right">
+            <div class="move-count-num" id="move-count">0</div>
+            <div class="move-count-label">moves</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Move list -->
+      <div class="card" id="moves-card">
+        <div class="moves-header">
+          <span>Move history</span>
+          <span class="opening-name" id="opening-name"></span>
+        </div>
+        <div class="moves-body gb-scroll" id="moves-body">
+          <div class="moves-empty" id="moves-empty">No moves yet &#8212; white to play.</div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls-grid" id="controls-row">
+        <button class="ctrl-btn disabled" id="btn-undo"><span class="ctrl-icon">&#8617;</span><span class="ctrl-label">Undo</span></button>
+        <button class="ctrl-btn" id="btn-flip"><span class="ctrl-icon">&#8693;</span><span class="ctrl-label">Flip</span></button>
+        <button class="ctrl-btn" id="btn-new"><span class="ctrl-icon">&#8635;</span><span class="ctrl-label">New</span></button>
+      </div>
+
+      <!-- Export / Import -->
+      <div class="card" id="export-card">
+        <button class="export-toggle" id="export-toggle">
+          <span class="export-kicker">Position &middot; Import / Export</span>
+          <span class="export-chev" id="export-chev">&#8964;</span>
+        </button>
+        <div id="export-body" class="hidden"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- LOBBY MODAL -->
+  <div id="lobby" class="hidden"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
